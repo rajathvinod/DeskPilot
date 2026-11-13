@@ -1,0 +1,15 @@
+# Python dependencies for the Windows agent.
+# Pinned loosely (compatible-release ranges) so a fresh install in 6 months still resolves,
+# while a broken major release cannot sneak in.
+
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.32,<1.0
+pydantic-settings>=2.6,<3.0
+
+# Outbound WebSocket client (Milestone 2b). The asyncio client API we use landed in 14.
+websockets>=14,<18
+
+# Screen capture and JPEG encoding (Milestone 3). mss reads pixels through the OS graphics
+# API; Pillow turns them into a format the phone can decode.
+mss>=10,<11
+Pillow>=11,<13

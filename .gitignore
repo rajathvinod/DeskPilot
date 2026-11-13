@@ -1,0 +1,71 @@
+# ---- Secrets (never commit) ----
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# ---- Node ----
+node_modules/
+npm-debug.log*
+.npm/
+dist/
+build/
+*.tsbuildinfo
+
+# ---- Expo / React Native ----
+.expo/
+.expo-shared/
+web-build/
+*.jks
+*.p8
+*.p12
+*.mobileprovision
+*.orig.*
+
+# ---- Python ----
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# ---- SQLite (local data) ----
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# ---- Runtime artifacts ----
+logs/
+*.log
+screenshots/
+recordings/
+
+# ---- OS / editor ----
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Local export checks
+.expo-export-check/
+
+# ---- Agent runtime state (step ledger) ----
+agent/.state/
+
+# Device registry: token hashes and paired device names stay local.
+backend/.state/
+
+# ---- Private working notes ----
+# docs/ holds the milestone journal, threat model and learn-as-you-go notes. It is written for the
+# person maintaining this laptop, not for the repository, and it is deliberately not published.
+docs/
+
+# ---- Local tooling ----
+.freebuff/
+.cloud-attachments/

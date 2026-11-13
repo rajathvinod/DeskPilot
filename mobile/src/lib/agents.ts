@@ -8,6 +8,17 @@
 
 import { apiFetch } from '@/lib/auth';
 
+/** One display the laptop can capture, as the agent measured it. */
+export type MonitorInfo = {
+  index: number;
+  /** Desktop coordinates; negative for a display placed left of / above the primary one. */
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  primary: boolean;
+};
+
 /** One connected agent, as the backend describes it. */
 export type AgentSummary = {
   agentId: string;
@@ -18,6 +29,8 @@ export type AgentSummary = {
   /** Desktop size in pixels when the agent reported it, else null. */
   screenWidth: number | null;
   screenHeight: number | null;
+  /** Empty means "this agent offered no displays", which is the single-screen case. */
+  monitors: MonitorInfo[];
   connectedForMs: number;
   /** How long ago the agent last proved it was alive. An *age*, not a timestamp — see below. */
   lastSeenAgoMs: number;
@@ -172,12 +185,35 @@ function toAgent(raw: Record<string, unknown>): AgentSummary {
     remoteAddress: text(raw.remoteAddress, '?'),
     screenWidth: nullableNumber(raw.screenWidth),
     screenHeight: nullableNumber(raw.screenHeight),
+    monitors: toMonitors(raw.monitors),
     connectedForMs: numberOf(raw.connectedForMs, 0),
     // An age is only interesting if it is small; defaulting to "just seen" would hide a
     // silent agent, so an unreadable value is treated as infinitely old.
     lastSeenAgoMs: numberOf(raw.lastSeenAgoMs, Number.MAX_SAFE_INTEGER),
     lastRttMs: typeof raw.lastRttMs === 'number' && Number.isFinite(raw.lastRttMs) ? raw.lastRttMs : null,
   };
+}
+
+/** Keep only monitor entries that could produce a frame. A bad option is worse than none. */
+function toMonitors(value: unknown): MonitorInfo[] {
+  if (!Array.isArray(value)) return [];
+  const monitors: MonitorInfo[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry)) continue;
+    const index = numberOf(entry.index, 0);
+    const width = numberOf(entry.width, 0);
+    const height = numberOf(entry.height, 0);
+    if (index < 1 || width <= 0 || height <= 0) continue;
+    monitors.push({
+      index,
+      left: numberOf(entry.left, 0),
+      top: numberOf(entry.top, 0),
+      width,
+      height,
+      primary: entry.primary === true,
+    });
+  }
+  return monitors;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

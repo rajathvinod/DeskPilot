@@ -124,16 +124,36 @@ def primary_screen_size() -> tuple[int, int]:
         return int(box["width"]), int(box["height"])
 
 
-def to_pixels(x: float, y: float) -> tuple[int, int]:
-    """Map a 0..1 point onto the desktop's pixel grid.
+def monitor_box(index: int = 1) -> dict[str, int]:
+    """Desktop rectangle of one display, falling back to the primary if the index is stale."""
+    with mss.mss() as recorder:
+        resolved = index if 1 <= index < len(recorder.monitors) else 1
+        box = recorder.monitors[resolved]
+        return {
+            "left": int(box["left"]),
+            "top": int(box["top"]),
+            "width": int(box["width"]),
+            "height": int(box["height"]),
+        }
+
+
+def to_pixels(x: float, y: float, monitor: int = 1) -> tuple[int, int]:
+    """Map a 0..1 point onto one display's pixel grid.
 
     `-1` because 1.0 means "the last pixel", not "one past the edge": on a 1920-wide screen
     that is 1919, which is a valid coordinate, while 1920 is off-screen.
+
+    The point is a fraction *of the monitor being shown*, so the display's own `left`/`top`
+    offset is added back at the end. Without that, a tap on a second monitor would be computed
+    from its size and then applied to the primary screen — the classic "works on one screen,
+    clicks the wrong thing at the same spot on the other" bug.
     """
-    width, height = primary_screen_size()
+    box = monitor_box(monitor)
+    width = box["width"]
+    height = box["height"]
     return (
-        max(0, min(width - 1, round(x * (width - 1)))),
-        max(0, min(height - 1, round(y * (height - 1)))),
+        box["left"] + max(0, min(width - 1, round(x * (width - 1)))),
+        box["top"] + max(0, min(height - 1, round(y * (height - 1)))),
     )
 
 
@@ -224,7 +244,9 @@ def scroll(notches: int) -> int:
     return notches
 
 
-def click_normalized(x: float, y: float, button: str = "left") -> dict[str, int]:
+def click_normalized(
+    x: float, y: float, button: str = "left", monitor: int = 1
+) -> dict[str, int]:
     """Move the cursor to a normalised point, then click there.
 
     `button="none"` moves without clicking. That is not a test escape hatch: dragging and
@@ -234,7 +256,7 @@ def click_normalized(x: float, y: float, button: str = "left") -> dict[str, int]
     if _user32 is None:
         raise RuntimeError("mouse control is only implemented on Windows")
 
-    pixel_x, pixel_y = to_pixels(x, y)
+    pixel_x, pixel_y = to_pixels(x, y, monitor)
     if not _user32.SetCursorPos(pixel_x, pixel_y):
         raise OSError(ctypes.get_last_error(), f"SetCursorPos({pixel_x}, {pixel_y}) failed")
 

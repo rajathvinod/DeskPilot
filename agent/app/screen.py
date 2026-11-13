@@ -43,17 +43,48 @@ class Frame:
     encode_ms: float
 
 
-def capture_jpeg(max_width: int = DEFAULT_MAX_WIDTH, quality: int = DEFAULT_QUALITY) -> Frame:
-    """Grab the primary monitor, scale it down if needed, and encode it as JPEG."""
+def list_monitors() -> list[dict[str, object]]:
+    """Every display the OS will admit to, with the rectangle it occupies.
+
+    `monitors[0]` in mss is the bounding box of *all* displays — a virtual desktop whose pixels
+    no single screen owns. It is deliberately not offered as a choice: capturing it would give
+    the phone a picture whose fractions map onto empty space between monitors.
+
+    `left`/`top` are desktop coordinates and can be negative (a display placed left of the
+    primary one). They are what makes a tap on monitor 2 land on monitor 2 instead of on the
+    primary screen's copy of the same fraction.
+    """
+    with mss.mss() as recorder:
+        return [
+            {
+                "index": number,
+                "left": int(box["left"]),
+                "top": int(box["top"]),
+                "width": int(box["width"]),
+                "height": int(box["height"]),
+                "primary": number == 1,
+            }
+            for number, box in enumerate(recorder.monitors[1:], start=1)
+        ]
+
+
+def capture_jpeg(
+    max_width: int = DEFAULT_MAX_WIDTH,
+    quality: int = DEFAULT_QUALITY,
+    monitor: int = 1,
+) -> Frame:
+    """Grab one monitor, scale it down if needed, and encode it as JPEG."""
     width_limit = max(320, min(int(max_width), _MAX_WIDTH_LIMIT))
     jpeg_quality = max(30, min(int(quality), _MAX_QUALITY))
 
     started = time.perf_counter()
     with mss.mss() as recorder:
-        # monitors[0] is the bounding box of every display; [1] is the primary one. One
-        # monitor per frame keeps coordinates honest for Milestone 5's touch mapping.
-        monitor = recorder.monitors[1]
-        shot = recorder.grab(monitor)
+        # monitors[0] is the bounding box of every display; 1..n are the displays themselves.
+        # An out-of-range index falls back to the primary instead of raising: a phone asking for
+        # monitor 3 after a display was unplugged should get a picture, not an error.
+        index = monitor if 1 <= monitor < len(recorder.monitors) else 1
+        box = recorder.monitors[index]
+        shot = recorder.grab(box)
         # grab() returns BGRA; `.rgb` drops the alpha channel we have no use for.
         image = Image.frombytes("RGB", shot.size, shot.rgb)
     captured = time.perf_counter()

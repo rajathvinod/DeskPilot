@@ -94,6 +94,26 @@ On a phone, `127.0.0.1` is the phone — use the laptop's LAN address (same Wi-F
 ./scripts/dev.sh start --dev-client # Expo aimed at the development build
 ```
 
+## Terminal CLI (laptop side)
+
+`scripts/deskpilot.cmd` wraps the setup steps and the routes you would otherwise curl:
+
+```bash
+./scripts/deskpilot.cmd install     # deps, venv, .env files, generated agent token, LAN address
+./scripts/deskpilot.cmd doctor      # check the setup without changing anything
+./scripts/deskpilot.cmd start --dev-client
+./scripts/deskpilot.cmd status
+./scripts/deskpilot.cmd pair
+./scripts/deskpilot.cmd devices [-a]
+./scripts/deskpilot.cmd revoke <id|--stale>
+```
+
+`install` only creates what is missing — re-running it is how you check, not how you reset.
+Add `scripts/` to PATH once to invoke it as `deskpilot`.
+
+The PowerShell file is deliberately ASCII-only: Windows PowerShell 5.1 reads a BOM-less script as
+ANSI, where a single em dash turns into a smart quote and swallows the rest of the file.
+
 ## Pairing
 
 The phone needs a token; the laptop is the only place a pairing code can be minted.

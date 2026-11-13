@@ -36,6 +36,7 @@ import {
   disableAlerts,
   enableAlerts,
   notifyAlert,
+  onAcknowledge,
   probeNotifications,
 } from '@/lib/notifications';
 import { probeVoice, startVoice, stopVoice, type VoiceSupport } from '@/lib/voice';
@@ -318,6 +319,17 @@ function ScreenCard({ baseUrl, agent }: { baseUrl: string; agent: AgentSummary }
   const [lastClick, setLastClick] = useState<string | null>(null);
   const [clicking, setClicking] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  /** Which display the picture is of. 1 is the primary one. */
+  const [monitor, setMonitor] = useState(1);
+  /**
+   * `handleTap` was written before monitors existed, and its dependency list does not mention
+   * one. A stale closure here would send a tap on screen 2 to screen 1 — a coordinate bug that
+   * looks like anything but a stale closure. A ref cannot go stale, so the click path reads it.
+   */
+  const monitorRef = useRef(1);
+  useEffect(() => {
+    monitorRef.current = monitor;
+  }, [monitor]);
 
   // Refs, not state: the loop must survive re-renders (every /agents poll and every stat
   // update re-renders this card) without restarting or leaving a second timer alive.
@@ -331,7 +343,7 @@ function ScreenCard({ baseUrl, agent }: { baseUrl: string; agent: AgentSummary }
     // Download, not `<Image source>`: frames are token-protected now and the platform's image
     // loader cannot send a header. The frame arrives as a data: URI instead — see `lib/screen.ts`
     // for why that beat putting the token in the URL.
-    const frame = await fetchFrame(baseUrl, agentId);
+    const frame = await fetchFrame(baseUrl, agentId, monitor);
 
     if (!frame.ok) {
       failuresRef.current += 1;
@@ -363,7 +375,9 @@ function ScreenCard({ baseUrl, agent }: { baseUrl: string; agent: AgentSummary }
       lastGapMs: gap,
     }));
     return true;
-  }, [baseUrl, agentId]);
+    // `monitor` belongs here: switching displays must restart the loop with the new one, and a
+    // live view that kept streaming the old screen would look like the switch did nothing.
+  }, [baseUrl, agentId, monitor]);
 
   useEffect(() => {
     liveRef.current = live;
@@ -406,7 +420,15 @@ function ScreenCard({ baseUrl, agent }: { baseUrl: string; agent: AgentSummary }
       if (point === null) return;
 
       setClicking(true);
-      const outcome = await clickAt(baseUrl, agentId, point.x, point.y);
+      const outcome = await clickAt(
+        baseUrl,
+        agentId,
+        point.x,
+        point.y,
+        'left',
+        undefined,
+        monitorRef.current,
+      );
       setClicking(false);
       setLastClick(
         outcome.ok
@@ -422,6 +444,30 @@ function ScreenCard({ baseUrl, agent }: { baseUrl: string; agent: AgentSummary }
 
   return (
     <View style={styles.card}>
+      {agent.monitors.length > 1 ? (
+        <Pressable
+          onPress={() => {
+            const index = agent.monitors.findIndex((option) => option.index === monitor);
+            const next = agent.monitors[(index + 1) % agent.monitors.length];
+            if (next === undefined) return;
+            setMonitor(next.index);
+            // Drop the old picture rather than leaving a frame of another screen under a label
+            // that now says this one. One blank moment beats a picture that lies.
+            setUri(null);
+            setFrameSize(null);
+          }}
+          style={({ pressed }) => pressed && styles.buttonPressed}
+        >
+          <Text style={styles.refresh}>
+            Showing{' '}
+            {agent.monitors.find((option) => option.index === monitor)?.primary === true
+              ? 'the main screen'
+              : `screen ${monitor}`}{' '}
+            of {agent.monitors.length} — tap to switch
+          </Text>
+        </Pressable>
+      ) : null}
+
       <View style={styles.screenHeader}>
         <Text style={styles.cardLabel}>SCREEN</Text>
         <View style={styles.screenActions}>
@@ -1200,6 +1246,18 @@ function ActivityCard({ baseUrl }: { baseUrl: string }) {
     const timer = setInterval(() => void load(), 5000);
     return () => clearInterval(timer);
   }, [load]);
+
+  /**
+   * The banner's Acknowledge button, wired to the same watermark write as the card's button.
+   * `load()` afterwards is what makes the count on screen agree with what was just dismissed.
+   */
+  useEffect(
+    () =>
+      onAcknowledge(() => {
+        void acknowledgeAlerts(baseUrl).then(() => load());
+      }),
+    [baseUrl, load],
+  );
 
   const toggleNotify = useCallback(async () => {
     if (notify === 'checking' || notify === 'unsupported' || busy) return;

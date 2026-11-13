@@ -258,6 +258,7 @@ export async function clickAt(
   y: number,
   button: 'left' | 'none' = 'left',
   timeoutMs: number = DEFAULT_TIMEOUT_MS,
+  monitor: number = 1,
 ): Promise<ClickOutcome> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -267,7 +268,9 @@ export async function clickAt(
     const response = await apiFetch(`${baseUrl}/agents/${agentId}/click`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ x, y, button }),
+      // `monitor` is what makes a tap on the second screen land on the second screen: the
+      // fraction is relative to the display in the picture, not to the desktop as a whole.
+      body: JSON.stringify({ x, y, button, monitor }),
       signal: controller.signal,
     });
 

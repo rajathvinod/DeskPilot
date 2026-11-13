@@ -29,6 +29,22 @@ export type Envelope<TType extends string = string, TPayload = unknown> = {
 };
 
 /** Agent → backend, first message after the socket opens. */
+/**
+ * One display, as the agent measured it.
+ *
+ * `left`/`top` are desktop coordinates and may be negative: a monitor positioned left of the
+ * primary one starts at a negative x. They exist so a tap on a second screen lands on that
+ * screen rather than on the primary one's copy of the same fraction.
+ */
+export type MonitorInfo = {
+  index: number;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  primary: boolean;
+};
+
 export type AgentInfo = {
   agentId: string;
   hostname: string;
@@ -43,6 +59,8 @@ export type AgentInfo = {
    * display, is still a usable agent for everything except pointing.
    */
   screen: { width: number; height: number } | null;
+  /** Every display the agent can capture. Empty for a machine that would not say. */
+  monitors: MonitorInfo[];
 };
 
 /** backend → agent, answers `hello` and tells the agent how often to ping. */
@@ -64,6 +82,8 @@ export type ScreenRequestPayload = {
   maxWidth: number;
   /** JPEG quality, 1-100. */
   quality: number;
+  /** Which display to capture. Absent means the primary one, i.e. the pre-multi-monitor path. */
+  monitor?: number | undefined;
 };
 
 /** backend → agent: click at a point expressed as a fraction of the screen (Milestone 5). */
@@ -72,6 +92,8 @@ export type ClickPayload = {
   y: number;
   /** `none` moves without clicking — needed for dragging later, and testable without side effects. */
   button: 'left' | 'none';
+  /** The display the fraction refers to. Absent means primary. */
+  monitor?: number | undefined;
 };
 
 /** backend → agent: type text into the focused window (Milestone 6). */
@@ -212,7 +234,47 @@ export function readAgentInfo(payload: unknown): AgentInfo | null {
     version: value.version as string,
     protocolVersion,
     screen: readScreen(value.screen),
+    monitors: readMonitors(value.monitors),
   };
+}
+
+/**
+ * Read the monitor list, dropping anything unusable instead of rejecting the handshake.
+ *
+ * A monitor is only offered to the phone if it has a positive size; a bad entry means a picker
+ * option that cannot produce a frame, which is worse than one option fewer. An agent that sends
+ * nothing (every build before this one) simply yields an empty list, and the phone shows no
+ * picker — the old behaviour, without a version check.
+ */
+function readMonitors(value: unknown): MonitorInfo[] {
+  if (!Array.isArray(value)) return [];
+
+  const monitors: MonitorInfo[] = [];
+  for (const entry of value) {
+    if (typeof entry !== 'object' || entry === null) continue;
+    const record = entry as Record<string, unknown>;
+    const index = record.index;
+    const width = record.width;
+    const height = record.height;
+    if (typeof index !== 'number' || typeof width !== 'number' || typeof height !== 'number') continue;
+    if (!Number.isFinite(index) || index < 1) continue;
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) continue;
+
+    const left = typeof record.left === 'number' && Number.isFinite(record.left) ? record.left : 0;
+    const top = typeof record.top === 'number' && Number.isFinite(record.top) ? record.top : 0;
+    monitors.push({
+      index: Math.round(index),
+      left: Math.round(left),
+      top: Math.round(top),
+      width: Math.round(width),
+      height: Math.round(height),
+      primary: record.primary === true || Math.round(index) === 1,
+    });
+    // A lid, not a limit on the laptop: nobody points a phone at twelve displays, and an agent
+    // that reported thousands is answering a question we did not ask.
+    if (monitors.length >= 8) break;
+  }
+  return monitors;
 }
 
 /** A screen size is only usable if both numbers are finite and positive. */

@@ -37,9 +37,15 @@ function toDataUri(blob: Blob): Promise<string> {
   });
 }
 
-export async function fetchFrame(baseUrl: string, agentId: string): Promise<FrameResult> {
+export async function fetchFrame(
+  baseUrl: string,
+  agentId: string,
+  monitor: number = 1,
+): Promise<FrameResult> {
   try {
-    const response = await apiFetch(`${baseUrl}/agents/${agentId}/screen`, {
+    // The monitor travels as a query parameter rather than a header: it is part of *what* was
+    // asked for, so it belongs in the cache key of anything that ever caches this route.
+    const response = await apiFetch(`${baseUrl}/agents/${agentId}/screen?monitor=${monitor}`, {
       headers: { Accept: 'image/jpeg' },
     });
 

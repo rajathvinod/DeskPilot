@@ -40,7 +40,7 @@ from app.input_control import (
     scroll,
     type_text,
 )
-from app.screen import DEFAULT_MAX_WIDTH, DEFAULT_QUALITY, capture_jpeg
+from app.screen import DEFAULT_MAX_WIDTH, DEFAULT_QUALITY, capture_jpeg, list_monitors
 from app.step_ledger import StepLedger
 
 log = logging.getLogger("deskpilot.ws")
@@ -275,6 +275,14 @@ class AgentConnection:
         except Exception:  # noqa: BLE001 - a missing size must not block the handshake
             log.warning("could not read the screen size at handshake", exc_info=True)
 
+        try:
+            # Sent with the handshake so the phone can offer a picker before it asks for a
+            # frame: a list that only arrived with the first capture would make the choice
+            # impossible on the screen where it is needed.
+            payload["monitors"] = list_monitors()
+        except Exception:  # noqa: BLE001 - a machine without a readable display is still an agent
+            payload["monitors"] = []
+
         await ws.send(_envelope("hello", payload))
 
         try:
@@ -434,9 +442,14 @@ class AgentConnection:
             )
             return
 
+        # Which display the click was aimed at. Absent means primary, which is what an older
+        # backend sends and what a single-monitor laptop always means.
+        monitor = payload.get("monitor")
+        monitor = monitor if isinstance(monitor, int) and monitor >= 1 else 1
+
         try:
             # A Win32 call blocks for a moment; keep it off the event loop like the capture.
-            at = await asyncio.to_thread(click_normalized, x, y, button)
+            at = await asyncio.to_thread(click_normalized, x, y, button, monitor)
         except Exception as exc:  # noqa: BLE001 - any failure is an answer for the backend
             log.exception("click failed")
             await ws.send(_envelope("error", {"code": "click_failed", "message": str(exc)}))
@@ -576,11 +589,13 @@ class AgentConnection:
         """
         max_width = _bounded_int(payload.get("maxWidth"), DEFAULT_MAX_WIDTH, 4096)
         quality = _bounded_int(payload.get("quality"), DEFAULT_QUALITY, 100)
+        monitor = payload.get("monitor")
+        monitor = monitor if isinstance(monitor, int) and monitor >= 1 else 1
 
         try:
             # Reading the desktop blocks inside the OS call. In a thread, the heartbeat keeps
             # running and the socket cannot look dead while a frame is being encoded.
-            frame = await asyncio.to_thread(capture_jpeg, max_width, quality)
+            frame = await asyncio.to_thread(capture_jpeg, max_width, quality, monitor)
         except Exception as exc:  # noqa: BLE001 - any capture failure is an answer for the backend
             log.exception("screen capture failed")
             await ws.send(_envelope("error", {"code": "capture_failed", "message": str(exc)}))

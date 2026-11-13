@@ -26,6 +26,7 @@ import {
   readString,
   type ActivityPayload,
   type AgentInfo,
+  type MonitorInfo,
 } from './protocol.js';
 
 /** How long a freshly upgraded socket has to introduce itself with `hello`. */
@@ -62,7 +63,12 @@ export const FRAME_JPEG_QUALITY = 70;
  * there, "absent" and "present but undefined" are different types, and a caller that builds
  * the object from optional query parameters produces the latter.
  */
-export type FrameOptions = { maxWidth?: number | undefined; quality?: number | undefined };
+export type FrameOptions = {
+  maxWidth?: number | undefined;
+  quality?: number | undefined;
+  /** Which display to capture. Absent means the primary one. */
+  monitor?: number | undefined;
+};
 
 const WIDTH_BOUNDS = { min: 320, max: 2560 } as const;
 const QUALITY_BOUNDS = { min: 30, max: 90 } as const;
@@ -119,6 +125,8 @@ export type AgentSnapshot = {
   /** Desktop size in pixels, or null if the agent could not report it. */
   screenWidth: number | null;
   screenHeight: number | null;
+  /** Displays the agent offered. Empty means "no picker", not "no screen". */
+  monitors: MonitorInfo[];
   connectedForMs: number;
   lastSeenAgoMs: number;
   lastRttMs: number | null;
@@ -388,6 +396,7 @@ export class AgentHub {
       remoteAddress: agent.remoteAddress,
       screenWidth: agent.info.screen?.width ?? null,
       screenHeight: agent.info.screen?.height ?? null,
+      monitors: agent.info.monitors,
       connectedForMs: now - agent.connectedAt,
       lastSeenAgoMs: now - agent.lastSeenAt,
       lastRttMs: agent.lastRttMs,
@@ -435,6 +444,9 @@ export class AgentHub {
           // should not be able to ask the laptop for a 40-megapixel capture.
           maxWidth: clamp(options.maxWidth ?? FRAME_MAX_WIDTH, WIDTH_BOUNDS),
           quality: clamp(options.quality ?? FRAME_JPEG_QUALITY, QUALITY_BOUNDS),
+          // Bounded rather than validated against the agent's own list: the list is the agent's
+          // claim, and a stale index is its own business — it falls back to the primary.
+          monitor: clamp(options.monitor ?? 1, { min: 1, max: 8 }),
         }),
       );
     } catch {
@@ -459,11 +471,19 @@ export class AgentHub {
     button: 'left' | 'none',
     timeoutMs: number,
     stepId?: string,
+    monitor?: number,
   ): Promise<{ screenX: number; screenY: number }> {
+    const payload = {
+      x,
+      y,
+      button,
+      ...(stepId === undefined ? {} : { stepId }),
+      ...(monitor === undefined ? {} : { monitor }),
+    };
     const ack = await this.request(
       agentId,
       'input.click',
-      stepId === undefined ? { x, y, button } : { x, y, button, stepId },
+      payload,
       timeoutMs,
     );
     return {

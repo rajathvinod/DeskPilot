@@ -86,6 +86,13 @@ async function configure(notifications: NotificationsPackage): Promise<void> {
     lightColor: '#208AEF',
   });
 
+  // One button on the banner. Android shows it as a notification action; iOS shows it when the
+  // banner is pulled down. "Acknowledge" is the one thing worth doing from outside the app, and
+  // it is the same watermark write the ACTIVITY card already makes.
+  await notifications.setNotificationCategoryAsync('desk-alert', [
+    { identifier: 'ack', buttonTitle: 'Acknowledge' },
+  ]);
+
   configured = true;
 }
 
@@ -133,6 +140,28 @@ export async function alertsEnabled(): Promise<boolean> {
 }
 
 /**
+ * Call `handler` when the banner's Acknowledge button is used.
+ *
+ * Returns an unsubscribe function. Honest limit: Android only runs this while the app's
+ * JavaScript is alive, so pressing the action on a cold app opens the app instead. The
+ * notification stays, which is the correct fallback — an acknowledge that silently did nothing
+ * would be worse than one that did not happen.
+ */
+export function onAcknowledge(handler: () => void): () => void {
+  const notifications = load();
+  if (notifications === null) return () => undefined;
+
+  try {
+    const subscription = notifications.addNotificationResponseReceivedListener((response) => {
+      if (response.actionIdentifier === 'ack') handler();
+    });
+    return () => subscription.remove();
+  } catch {
+    return () => undefined;
+  }
+}
+
+/**
  * Raise one notification for one audit event.
  *
  * Fire-and-forget by design: the caller is a poll that must not stall because a banner failed to
@@ -155,6 +184,7 @@ export async function notifyAlert(event: { app: string; title: string }): Promis
         body: what.slice(0, 160),
         // No deep link yet: the app is a single screen, so opening it *is* the destination.
         data: { screen: 'activity' },
+        categoryIdentifier: 'desk-alert',
       },
       trigger: null,
     });

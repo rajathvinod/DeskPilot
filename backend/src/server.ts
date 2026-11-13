@@ -343,7 +343,10 @@ async function main(): Promise<void> {
    * places: no such agent (start it), agent too slow (check the laptop), capture broke
    * (read the agent log).
    */
-  app.get<{ Params: { agentId: string }; Querystring: { maxWidth?: string; quality?: string } }>(
+  app.get<{
+    Params: { agentId: string };
+    Querystring: { maxWidth?: string; quality?: string; monitor?: string };
+  }>(
     '/agents/:agentId/screen',
     async (request, reply) => {
       const { agentId } = request.params;
@@ -352,6 +355,9 @@ async function main(): Promise<void> {
       const options = {
         maxWidth: numericQuery(request.query.maxWidth),
         quality: numericQuery(request.query.quality),
+        // A query parameter rather than a required field: every existing caller keeps working
+        // and simply gets the primary display, which is what they were getting before.
+        monitor: numericQuery(request.query.monitor),
       };
       try {
         const frame = await hub.requestFrame(agentId, FRAME_TIMEOUT_MS, options);
@@ -386,7 +392,7 @@ async function main(): Promise<void> {
    */
   app.post<{
     Params: { agentId: string };
-    Body: { x: number; y: number; button?: 'left' | 'none' };
+    Body: { x: number; y: number; button?: 'left' | 'none'; monitor?: number };
   }>(
     '/agents/:agentId/click',
     {
@@ -401,15 +407,18 @@ async function main(): Promise<void> {
             // `none` moves without clicking: needed for dragging later, and lets the mapping
             // be verified without clicking something on the desktop.
             button: { type: 'string', enum: ['left', 'none'] },
+            // The display the fraction refers to. Omitted means primary, so an older phone
+            // build keeps working against this backend.
+            monitor: { type: 'integer', minimum: 1, maximum: 8 },
           },
         },
       },
     },
     async (request, reply) => {
       const { agentId } = request.params;
-      const { x, y, button = 'left' } = request.body;
+      const { x, y, button = 'left', monitor } = request.body;
       try {
-        const at = await hub.click(agentId, x, y, button, CLICK_TIMEOUT_MS);
+        const at = await hub.click(agentId, x, y, button, CLICK_TIMEOUT_MS, undefined, monitor);
         return reply.send({ ok: true, screenX: at.screenX, screenY: at.screenY, button });
       } catch (error) {
         if (error instanceof AgentNotFoundError) {

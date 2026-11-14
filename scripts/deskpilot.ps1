@@ -49,6 +49,29 @@ function Get-LanAddress {
   return $null
 }
 
+function Resolve-Bash {
+  # Git for Windows ships bash.exe in <install>\bin, but its installer only adds <install>\cmd to
+  # PATH - so `git` works on a normal machine while `bash` does not. Asking the registry where Git
+  # was installed is the honest fix; guessing install folders is how this breaks on the next PC.
+  $candidates = @()
+  $registry = Get-ItemProperty 'HKLM:\SOFTWARE\GitForWindows' -ErrorAction SilentlyContinue
+  if ($registry -and $registry.InstallPath) {
+    $candidates += (Join-Path $registry.InstallPath 'bin\bash.exe')
+  }
+  $onPath = Get-Command bash -ErrorAction SilentlyContinue
+  if ($onPath) { $candidates += $onPath.Source }
+  $candidates += @(
+    "$env:ProgramFiles\Git\bin\bash.exe",
+    "${env:ProgramFiles(x86)}\Git\bin\bash.exe",
+    "$env:LOCALAPPDATA\Programs\Git\bin\bash.exe",
+    "$env:LOCALAPPDATA\Programs\@codebufffreebuff-desktop\resources\git\bin\bash.exe"
+  )
+  foreach ($candidate in $candidates) {
+    if ($candidate -and (Test-Path $candidate)) { return $candidate }
+  }
+  return $null
+}
+
 function Test-Http($url) {
   try {
     $response = Invoke-WebRequest -Uri $url -TimeoutSec 4 -UseBasicParsing
@@ -92,12 +115,12 @@ function Invoke-Install {
   $node = Get-Command node -ErrorAction SilentlyContinue
   $npm = Get-Command npm -ErrorAction SilentlyContinue
   $python = Get-Command python -ErrorAction SilentlyContinue
-  $bash = Get-Command bash -ErrorAction SilentlyContinue
+  $bash = Resolve-Bash
 
   if (-not $node) { Write-Bad "Node.js is missing - install Node 22 first"; return 1 }
   if (-not $npm) { Write-Bad "npm is missing"; return 1 }
   if (-not $python) { Write-Bad "Python is missing - install Python 3.12 first"; return 1 }
-  if (-not $bash) { Write-Note "Git Bash not found: start/stop will not work until it is installed" }
+  if ($bash) { Write-Ok "bash $($bash)" } else { Write-Note "Git Bash not found: start/stop needs it (install Git for Windows)" }
   Write-Ok "node $(& node --version), python $(& python --version 2>&1)"
 
   # Backend dependencies. `npm ci` when a lockfile exists: reproducible, and it is what the
@@ -183,7 +206,8 @@ function Invoke-Doctor {
 
   if (Get-Command node -ErrorAction SilentlyContinue) { Write-Ok "node $(& node --version)" } else { Write-Bad "node is missing"; $problems++ }
   if (Get-Command python -ErrorAction SilentlyContinue) { Write-Ok "python $(& python --version 2>&1)" } else { Write-Bad "python is missing"; $problems++ }
-  if (Get-Command bash -ErrorAction SilentlyContinue) { Write-Ok "Git Bash present" } else { Write-Bad "Git Bash missing (needed by start/stop)"; $problems++ }
+  $bash = Resolve-Bash
+  if ($bash) { Write-Ok "Git Bash: $bash" } else { Write-Bad "Git Bash missing (needed by start/stop)"; $problems++ }
 
   $venvPython = Join-Path $Root 'agent/.venv/Scripts/python.exe'
   if (Test-Path $venvPython) { Write-Ok "agent virtualenv present" } else { Write-Bad "agent virtualenv missing - run install"; $problems++ }
@@ -326,9 +350,47 @@ switch ($Command.ToLower()) {
   'revoke' { exit ([int](Invoke-Revoke | Select-Object -Last 1)) }
   'status' { exit ([int](Invoke-Status | Select-Object -Last 1)) }
   { $_ -in 'start', 'stop', 'restart' } {
-    $bash = Get-Command bash -ErrorAction SilentlyContinue
-    if (-not $bash) { Write-Bad "start/stop need Git Bash"; exit 1 }
-    & bash (Join-Path $Root 'scripts/dev.sh') $Command.ToLower() @Rest
+    $bash = Resolve-Bash
+    if (-not $bash) { Write-Bad "start/stop need Git Bash (install Git for Windows)"; exit 1 }
+    # Redirect to files and wait for the launcher only. The services dev.sh backgrounds inherit
+    # this console's handles, so a bare `& bash dev.sh start` leaves PowerShell waiting for output
+    # that arrives only when the backend exits - the command looks hung while the stack is
+    # actually up. Redirecting ends that wait; the tail below still shows what dev.sh said.
+    $logDir = Join-Path $Root 'logs'
+    if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir | Out-Null }
+    $outFile = Join-Path $logDir 'deskpilot-cli.out'
+    $errFile = Join-Path $logDir 'deskpilot-cli.err'
+
+    # Resolved path, not a bare `bash`: a stock Git install keeps bash.exe off PATH even though
+    # git is on it, and "bash is not recognized" is a confusing way to learn that.
+    $arguments = @((Join-Path $Root 'scripts/dev.sh'), $Command.ToLower()) + $Rest
+    $quoted = $arguments | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }
+
+    # With Expo in the foreground there is nothing to wait for and nothing to hide: the QR has to
+    # reach this console, and Ctrl-C has to stop all three. Anything else is "background", where
+    # the useful signal is the backend answering, not the launcher exiting - dev.sh keeps a
+    # supervising shell around the services, so waiting on it would just look like a hang.
+    $wantsMobile = -not ($Rest -contains '--no-mobile')
+    if ($Command.ToLower() -eq 'stop' -or $wantsMobile) {
+      & $bash @arguments
+      exit $LASTEXITCODE
+    }
+
+    $process = Start-Process -FilePath $bash -ArgumentList ($quoted -join ' ') `
+      -WorkingDirectory $Root -WindowStyle Hidden -PassThru `
+      -RedirectStandardOutput $outFile -RedirectStandardError $errFile
+
+    $deadline = (Get-Date).AddSeconds(90)
+    while ((Get-Date) -lt $deadline -and -not (Test-Http "$Base/health")) { Start-Sleep -Milliseconds 500 }
+
+    if (Test-Path $outFile) { Get-Content $outFile | ForEach-Object { Write-Host $_ } }
+    if (Test-Path $errFile) {
+      Get-Content $errFile | Where-Object { $_ } | ForEach-Object { Write-Host $_ -ForegroundColor DarkYellow }
+    }
+
+    if (Test-Http "$Base/health") { Write-Ok "backend answered - ready" ; exit 0 }
+    Write-Bad "backend did not answer within 90s - see logs/backend.log"
+    exit 1
     exit $LASTEXITCODE
   }
   default {

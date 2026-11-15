@@ -48,6 +48,13 @@ import { fetchFrame } from '@/lib/screen';
 import { parsePairPayload } from '@/lib/pairing';
 import { probeCamera } from '@/lib/camera';
 import {
+  fetchLaptopClipboard,
+  probePhoneClipboard,
+  readPhoneClipboard,
+  sendLaptopClipboard,
+  writePhoneClipboard,
+} from '@/lib/clipboard';
+import {
   clickAt,
   normalizeTap,
   pressKey,
@@ -170,6 +177,7 @@ export default function StatusScreen() {
           <>
             <ScreenCard baseUrl={API_URL} agent={link.agent} />
             <KeyboardCard baseUrl={API_URL} agent={link.agent} />
+            <ClipboardCard baseUrl={API_URL} agent={link.agent} />
             <VoiceCard baseUrl={API_URL} agent={link.agent} />
             <AskCard baseUrl={API_URL} agent={link.agent} />
           </>
@@ -1231,6 +1239,110 @@ function PairCard({
  * alert you see every minute is not an alert.
  */
 type NotifyState = 'checking' | 'on' | 'off' | 'unsupported';
+
+/**
+ * Clipboard sync, two directions, one card.
+ *
+ * Deliberately not automatic. A clipboard that syncs on its own quietly moves whatever was
+ * copied last — passwords included — to another device without being asked. Both buttons here
+ * are one-shot and say what they did in characters, so "it worked" is a number, not a shrug.
+ */
+function ClipboardCard({ baseUrl, agent }: { baseUrl: string; agent: AgentSummary }) {
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
+
+  const pull = useCallback(async () => {
+    if (busy) return;
+    setBusy(true);
+    setStatus(null);
+
+    const support = await probePhoneClipboard();
+    if (!support.available) {
+      setStatus(support.reason);
+      setBusy(false);
+      return;
+    }
+
+    const laptop = await fetchLaptopClipboard(baseUrl, agent.agentId);
+    if (laptop === null) {
+      setStatus('Could not read the laptop clipboard (is the agent connected?).');
+      setBusy(false);
+      return;
+    }
+    if (!laptop.ok) {
+      setStatus(laptop.error ?? 'The laptop refused to share its clipboard.');
+      setBusy(false);
+      return;
+    }
+
+    const written = await writePhoneClipboard(laptop.text);
+    setPreview(laptop.text.slice(0, 160));
+    setStatus(
+      written
+        ? `Copied ${laptop.chars} characters from the laptop.`
+        : "Could not write to this phone's clipboard.",
+    );
+    setBusy(false);
+  }, [agent.agentId, baseUrl, busy]);
+
+  const push = useCallback(async () => {
+    if (busy) return;
+    setBusy(true);
+    setStatus(null);
+
+    const support = await probePhoneClipboard();
+    if (!support.available) {
+      setStatus(support.reason);
+      setBusy(false);
+      return;
+    }
+
+    const text = await readPhoneClipboard();
+    if (text === null) {
+      setStatus('This phone\'s clipboard has no text on it.');
+      setBusy(false);
+      return;
+    }
+
+    const chars = await sendLaptopClipboard(baseUrl, agent.agentId, text);
+    setPreview(chars === null ? null : text.slice(0, 160));
+    setStatus(
+      chars === null
+        ? 'The laptop did not accept the clipboard text.'
+        : `Sent ${chars} characters to the laptop clipboard.`,
+    );
+    setBusy(false);
+  }, [agent.agentId, baseUrl, busy]);
+
+  return (
+    <View style={styles.card}>
+      <Text style={styles.cardLabel}>CLIPBOARD</Text>
+      <Text style={styles.hint}>
+        Text only, both directions, one press each. Nothing syncs on its own: a clipboard that
+        follows you around also carries the password you copied five minutes ago.
+      </Text>
+      <View style={styles.keyRow}>
+        <Pressable
+          onPress={() => void pull()}
+          disabled={busy}
+          style={({ pressed }) => [styles.key, (pressed || busy) && styles.buttonPressed]}
+        >
+          <Text style={styles.keyText}>{busy ? 'working…' : 'Laptop → this phone'}</Text>
+        </Pressable>
+        <Pressable
+          onPress={() => void push()}
+          disabled={busy}
+          style={({ pressed }) => [styles.key, (pressed || busy) && styles.buttonPressed]}
+        >
+          <Text style={styles.keyText}>{busy ? 'working…' : 'This phone → laptop'}</Text>
+        </Pressable>
+      </View>
+      {status === null ? null : <Text style={styles.frameMeta}>{status}</Text>}
+      {preview === null ? null : <Text style={styles.frameMeta}>{preview}</Text>}
+    </View>
+  );
+}
 
 function ActivityCard({ baseUrl }: { baseUrl: string }) {
   const [snapshot, setSnapshot] = useState<AuditSnapshot | null>(null);

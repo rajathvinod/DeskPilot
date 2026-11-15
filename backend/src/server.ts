@@ -38,6 +38,9 @@ const FRAME_TIMEOUT_MS = 8_000;
 
 /** A click should be nearly instant; if the agent takes 3 s, something is wrong with it. */
 const CLICK_TIMEOUT_MS = 3_000;
+// The clipboard can be slower than a click: another process may hold it open for a moment, and
+// the agent retries nothing, so it either answers inside this window or the phone is told it did not.
+const CLIPBOARD_TIMEOUT_MS = 5_000;
 
 /**
  * Read a numeric query parameter, or `undefined` when it is absent or nonsense.
@@ -455,6 +458,77 @@ async function main(): Promise<void> {
         }
         app.log.error({ err: error, agentId }, 'click failed');
         return reply.code(500).send({ error: 'internal_error', message: 'could not click' });
+      }
+    },
+  );
+
+  /**
+   * The laptop's clipboard, as text.
+   *
+   * The most sensitive thing the agent hands back — a copied password or a private message is
+   * exactly what a clipboard holds — so it sits behind the device token like every other route and
+   * is refused by the agent while the kill switch is engaged.
+   */
+  app.get<{ Params: { agentId: string } }>(
+    '/agents/:agentId/clipboard',
+    async (request, reply) => {
+      const { agentId } = request.params;
+      try {
+        const result = await hub.readClipboard(agentId, CLIPBOARD_TIMEOUT_MS);
+        return reply.send(result);
+      } catch (error) {
+        if (error instanceof AgentNotFoundError) {
+          return reply.code(404).send({ error: 'agent_not_connected', message: error.message });
+        }
+        if (error instanceof FrameTimeoutError) {
+          return reply.code(504).send({ error: 'clipboard_timeout', message: error.message });
+        }
+        if (error instanceof FrameFailedError) {
+          return reply.code(502).send({ error: 'clipboard_failed', message: error.message });
+        }
+        app.log.error({ err: error, agentId }, 'clipboard read failed');
+        return reply.code(500).send({ error: 'internal_error', message: 'could not read the clipboard' });
+      }
+    },
+  );
+
+  /**
+   * Put the phone's text on the laptop's clipboard.
+   *
+   * The 20 000-character limit is enforced twice on purpose: here, so an oversized body never
+   * reaches the agent, and in the agent, so a direct socket caller cannot bypass the route.
+   */
+  app.post<{ Params: { agentId: string }; Body: { text: string } }>(
+    '/agents/:agentId/clipboard',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          required: ['text'],
+          additionalProperties: false,
+          properties: {
+            text: { type: 'string', maxLength: 20_000 },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { agentId } = request.params;
+      try {
+        const chars = await hub.writeClipboard(agentId, request.body.text, CLIPBOARD_TIMEOUT_MS);
+        return reply.send({ ok: true, chars });
+      } catch (error) {
+        if (error instanceof AgentNotFoundError) {
+          return reply.code(404).send({ error: 'agent_not_connected', message: error.message });
+        }
+        if (error instanceof FrameTimeoutError) {
+          return reply.code(504).send({ error: 'clipboard_timeout', message: error.message });
+        }
+        if (error instanceof FrameFailedError) {
+          return reply.code(502).send({ error: 'clipboard_failed', message: error.message });
+        }
+        app.log.error({ err: error, agentId }, 'clipboard write failed');
+        return reply.code(500).send({ error: 'internal_error', message: 'could not write the clipboard' });
       }
     },
   );

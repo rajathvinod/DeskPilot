@@ -101,6 +101,8 @@ On a phone, `127.0.0.1` is the phone — use the laptop's LAN address (same Wi-F
 ```bash
 ./scripts/deskpilot.cmd install     # deps, venv, .env files, generated agent token, LAN address
 ./scripts/deskpilot.cmd doctor      # check the setup without changing anything
+./scripts/deskpilot.cmd install --autostart   # also start backend + agent at login
+./scripts/deskpilot.cmd install --remove-autostart
 ./scripts/deskpilot.cmd start --dev-client
 ./scripts/deskpilot.cmd status
 ./scripts/deskpilot.cmd pair [--qr]     # --qr prints a scannable QR and the address to use

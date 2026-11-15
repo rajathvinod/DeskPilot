@@ -107,6 +107,34 @@ function Add-EnvValue($file, $key, $value) {
 }
 
 # ---------------------------------------------------------------------------------------------
+# autostart
+# ---------------------------------------------------------------------------------------------
+function Set-Autostart {
+  # A per-user Run key, not a service: starting the agent at login must not need admin rights, and
+  # removing it is deleting one value. The launcher is hidden because a console window that flashes
+  # on every login is the kind of thing people disable instead of using.
+  $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+  $script = Join-Path $Root 'scripts/deskpilot.ps1'
+  $quote = [char]34
+  $command = 'powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File ' +
+    $quote + $script + $quote + ' start --no-mobile'
+  New-Item -Path $key -Force | Out-Null
+  Set-ItemProperty -Path $key -Name 'DeskPilot' -Value $command
+  Write-Ok 'autostart installed: HKCU Run -> DeskPilot (backend + agent at login)'
+}
+
+function Remove-Autostart {
+  $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+  $existing = Get-ItemProperty -Path $key -Name 'DeskPilot' -ErrorAction SilentlyContinue
+  if ($null -eq $existing) {
+    Write-Note 'autostart was not installed'
+    return
+  }
+  Remove-ItemProperty -Path $key -Name 'DeskPilot'
+  Write-Ok 'autostart removed'
+}
+
+# ---------------------------------------------------------------------------------------------
 # install
 # ---------------------------------------------------------------------------------------------
 function Invoke-Install {
@@ -189,6 +217,9 @@ function Invoke-Install {
   }
 
   if (-not $lan) { Write-Note "could not detect a LAN address - set EXPO_PUBLIC_API_URL in mobile/.env by hand" }
+
+  if ($Rest -contains '--autostart') { Set-Autostart }
+  elseif ($Rest -contains '--remove-autostart') { Remove-Autostart }
 
   Write-Head "Next"
   Write-Host "  1. ./deskpilot.cmd start --dev-client"
@@ -421,6 +452,8 @@ switch ($Command.ToLower()) {
     Write-Host "DeskPilot on the laptop"
     Write-Host ""
     Write-Host "  deskpilot install                 create what is missing (safe to re-run)"
+    Write-Host "  deskpilot install --autostart     also start backend + agent at login"
+    Write-Host "  deskpilot install --remove-autostart"
     Write-Host "  deskpilot doctor                  check the setup, without changing it"
     Write-Host "  deskpilot start [--no-mobile] [--dev-client]"
     Write-Host "  deskpilot stop | restart"

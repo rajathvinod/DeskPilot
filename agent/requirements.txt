@@ -13,3 +13,7 @@ websockets>=14,<18
 # API; Pillow turns them into a format the phone can decode.
 mss>=10,<11
 Pillow>=11,<13
+
+# Text clipboard, both directions (Phase 0 of the assistant work). Pure Python, no compile step;
+# it talks to the Windows clipboard directly and keeps no state of its own.
+pyperclip>=1.9,<2.0

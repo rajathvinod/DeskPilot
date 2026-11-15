@@ -538,6 +538,32 @@ export class AgentHub {
   }
 
   /**
+   * What is on the agent's clipboard right now.
+   *
+   * `ok: false` is a real answer, not a failure: the clipboard can hold more text than the agent
+   * is willing to push through a socket, and "too big" is something the person can act on. Only a
+   * missing agent, a closed socket or a silent one reject.
+   */
+  async readClipboard(
+    agentId: string,
+    timeoutMs: number,
+  ): Promise<{ ok: boolean; text: string; chars: number; error: string | null }> {
+    const ack = await this.request(agentId, 'clipboard.get', {}, timeoutMs);
+    return {
+      ok: ack.ok === true,
+      text: typeof ack.text === 'string' ? ack.text : '',
+      chars: typeof ack.chars === 'number' ? ack.chars : 0,
+      error: typeof ack.error === 'string' ? ack.error : null,
+    };
+  }
+
+  /** Replace the agent's clipboard. Resolves with how many characters the agent took. */
+  async writeClipboard(agentId: string, text: string, timeoutMs: number): Promise<number> {
+    const ack = await this.request(agentId, 'clipboard.set', { text }, timeoutMs);
+    return typeof ack.chars === 'number' ? ack.chars : text.length;
+  }
+
+  /**
    * Send one message that expects an `input.ack`, and wait for the reply carrying its id.
    *
    * Everything the phone does to the desktop goes through here, because the failure modes are

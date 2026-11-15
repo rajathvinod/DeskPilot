@@ -143,6 +143,9 @@ def _bounded_int(value: Any, fallback: int, ceiling: int) -> int:
     return min(int(value), ceiling)
 
 
+from .clipboard import MAX_CLIPBOARD_CHARS, ClipboardError, read_text as clipboard_read, write_text as clipboard_write
+
+
 def _envelope(type_: str, payload: dict[str, Any]) -> str:
     return json.dumps({"type": type_, "id": str(uuid.uuid4()), "payload": payload})
 
@@ -389,6 +392,10 @@ class AgentConnection:
             await self._key(ws, message.get("id"), payload)
         elif type_ == "input.scroll":
             await self._scroll(ws, message.get("id"), payload)
+        elif type_ == "clipboard.get":
+            await self._clipboard_get(ws, message.get("id"))
+        elif type_ == "clipboard.set":
+            await self._clipboard_set(ws, message.get("id"), payload)
         elif type_ == "error":
             log.error("backend reported %s: %s", payload.get("code"), payload.get("message"))
         else:
@@ -498,6 +505,68 @@ class AgentConnection:
         ack = {"ok": True, "typed": typed}
         self._remember(payload, ack)
         await ws.send(_envelope("input.ack", {"for": envelope_id or "", **ack}))
+
+    async def _clipboard_get(self, ws: ClientConnection, envelope_id: Any) -> None:
+        """Answer with what is on the laptop's clipboard.
+
+        Replies on `input.ack` like every other action: the backend already routes that message
+        by envelope id, and a second reply type would be a second path to keep correct. The
+        kill switch refuses this along with everything else, which is deliberate — someone
+        who locked the laptop from their phone should not be able to read its clipboard.
+        """
+        try:
+            value = await asyncio.to_thread(clipboard_read)
+        except ClipboardError as exc:
+            await ws.send(_envelope("error", {"code": "clipboard_failed", "message": str(exc)}))
+            return
+
+        truncated = len(value) > MAX_CLIPBOARD_CHARS
+        # Refusing is the honest move: half a document looks like the whole document.
+        if truncated:
+            log.warning("clipboard holds %d characters; refusing to send it", len(value))
+            await ws.send(
+                _envelope(
+                    "input.ack",
+                    {
+                        "for": envelope_id or "",
+                        "ok": False,
+                        "text": "",
+                        "chars": len(value),
+                        "error": f"clipboard text is longer than {MAX_CLIPBOARD_CHARS} characters",
+                    },
+                )
+            )
+            return
+
+        log.info("clipboard read: %d chars", len(value))
+        await ws.send(
+            _envelope(
+                "input.ack",
+                {"for": envelope_id or "", "ok": True, "text": value, "chars": len(value)},
+            )
+        )
+
+    async def _clipboard_set(
+        self, ws: ClientConnection, envelope_id: Any, payload: dict[str, Any]
+    ) -> None:
+        """Replace the laptop's clipboard with the phone's text."""
+        text = payload.get("text")
+        if not isinstance(text, str):
+            await ws.send(
+                _envelope("error", {"code": "bad_clipboard", "message": "text must be a string"})
+            )
+            return
+
+        try:
+            written = await asyncio.to_thread(clipboard_write, text)
+        except ClipboardError as exc:
+            await ws.send(_envelope("error", {"code": "clipboard_failed", "message": str(exc)}))
+            return
+
+        log.info("clipboard written: %d chars", written)
+        await ws.send(
+            _envelope("input.ack", {"for": envelope_id or "", "ok": True, "chars": written})
+        )
 
     async def _key(self, ws: ClientConnection, envelope_id: Any, payload: dict[str, Any]) -> None:
         """Press one named key. The name is checked against a fixed list, never passed through."""

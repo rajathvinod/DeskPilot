@@ -103,7 +103,7 @@ On a phone, `127.0.0.1` is the phone — use the laptop's LAN address (same Wi-F
 ./scripts/deskpilot.cmd doctor      # check the setup without changing anything
 ./scripts/deskpilot.cmd start --dev-client
 ./scripts/deskpilot.cmd status
-./scripts/deskpilot.cmd pair
+./scripts/deskpilot.cmd pair [--qr]     # --qr prints a scannable QR and the address to use
 ./scripts/deskpilot.cmd devices [-a]
 ./scripts/deskpilot.cmd revoke <id|--stale>
 ```

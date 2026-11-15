@@ -11,6 +11,7 @@ import {
 } from './agentHub.js';
 import { AiLoop, AiModelError, AiNotConfiguredError, AiRateLimitError } from './ai/loop.js';
 import { timingSafeEqual } from 'node:crypto';
+import { networkInterfaces } from 'node:os';
 
 import { AuditLog, AwayMode } from './audit.js';
 import { loadConfig } from './config.js';
@@ -150,7 +151,7 @@ hub.onActivity((info, activity) => {
  * outgoing socket: it is dialled from the laptop itself, and authenticating it is a separate
  * job (documented as a remaining gap rather than pretended away).
  */
-const PUBLIC_ROUTES = new Set(['/health', '/pair', '/pair/code', '/arm', '/agent/ws']);
+const PUBLIC_ROUTES = new Set(['/health', '/pair', '/pair/code', '/pair/qr', '/arm', '/agent/ws']);
 
 function bearerToken(header: string | undefined): string | undefined {
   if (header === undefined) return undefined;
@@ -161,6 +162,28 @@ function bearerToken(header: string | undefined): string | undefined {
 }
 
 /** Loopback is "someone sitting at the laptop", the one caller we trust without a token. */
+/**
+ * The address a phone on the same network can reach this backend on.
+ *
+ * Tailscale first, because it works from anywhere; then a private IPv4 on a real adapter. `null`
+ * when neither exists — a laptop with no network can still pair by typing, and inventing
+ * `localhost` here would produce a QR that leads the phone to itself.
+ */
+function lanAddress(port: number): string | null {
+  const candidates: string[] = [];
+  for (const entries of Object.values(networkInterfaces())) {
+    for (const entry of entries ?? []) {
+      if (entry.family === 'IPv4' && !entry.internal) candidates.push(entry.address);
+    }
+  }
+  const tailnet = candidates.find((address) => address.startsWith('100.'));
+  const privateAddress = candidates.find((address) =>
+    /^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.)/.test(address),
+  );
+  const chosen = tailnet ?? privateAddress;
+  return chosen === undefined ? null : `http://${chosen}:${port}`;
+}
+
 function isLoopback(address: string | undefined): boolean {
   return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
 }
@@ -747,6 +770,28 @@ async function main(): Promise<void> {
       });
     }
     return reply.send(devices.createCode());
+  });
+
+  /**
+   * The same code, as something a phone camera can read.
+   *
+   * Typing six characters is the step people get wrong, so the QR carries both the code and the
+   * address the laptop answers on. Issuing it is still loopback-only, for the same reason the
+   * text code is: a code readable from the tailnet would be a convenience, not a second factor.
+   */
+  app.get('/pair/qr', async (request, reply) => {
+    if (!isLoopback(request.ip)) {
+      return reply.code(403).send({
+        error: 'loopback_only',
+        message: 'pairing QRs are only issued on the laptop itself: ./deskpilot.cmd pair --qr',
+      });
+    }
+
+    const minted = devices.createCode();
+    const url = lanAddress(config.port);
+    const query = new URLSearchParams({ code: minted.code });
+    if (url !== null) query.set('url', url);
+    return reply.send({ ...minted, url, payload: `deskpilot://pair?${query.toString()}` });
   });
 
   /**

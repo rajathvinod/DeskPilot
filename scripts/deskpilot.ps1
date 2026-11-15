@@ -258,12 +258,27 @@ function Invoke-Doctor {
 # Everything that is just the backend's own routes
 # ---------------------------------------------------------------------------------------------
 function Invoke-Pair {
-  try { $code = Get-Json '/pair/code' } catch { Write-Bad "no answer from $Base - start the backend first"; return 1 }
+  $wantQr = $Rest -contains '--qr'
+  $path = if ($wantQr) { '/pair/qr' } else { '/pair/code' }
+  try { $minted = Get-Json $path } catch { Write-Bad "no answer from $Base - start the backend first"; return 1 }
+
   Write-Head "Pairing code"
-  Write-Host "  $($code.code)" -ForegroundColor Green
-  Write-Host "  expires $($code.expiresAt)  (single use, $( [int]($code.ttlSeconds / 60) ) minutes)"
-  Write-Host ""
-  Write-Host "  On the phone: PAIR THIS PHONE -> type the code -> Pair"
+  Write-Host "  $($minted.code)" -ForegroundColor Green
+  Write-Host "  expires $($minted.expiresAt)  (single use, $([int]($minted.ttlSeconds / 60)) minutes)"
+
+  if ($wantQr) {
+    # Rendered by qrcode-terminal in backend/node_modules - one small dependency, no native side,
+    # so the terminal can show what the phone's new scanner reads.
+    $render = "const qr = require('qrcode-terminal'); qr.generate(process.argv[1], { small: true });"
+    Push-Location (Join-Path $Root 'backend')
+    # Out-Host, so the QR prints here rather than being collected and flushed after the hints.
+    try { & node -e $render $minted.payload | Out-Host } finally { Pop-Location }
+    Write-Host "  On the phone: PAIR THIS PHONE -> Scan QR"
+  } else {
+    Write-Host "  On the phone: PAIR THIS PHONE -> type the code -> Pair"
+  }
+
+  if ($minted.url) { Write-Host "  the phone should reach the backend at $($minted.url)" }
   return 0
 }
 
@@ -340,15 +355,24 @@ function Invoke-Status {
 # ---------------------------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------------------------
-# `| Select-Object -Last 1` because these functions also let command output through (npm, pip);
-# only their final value is the exit code.
+# These functions both print and return a number, and the number is the exit code. Anything that
+# goes through the *pipeline* (npm, pip, the QR renderer) has to be shown explicitly: capturing
+# the return value with Select-Object -Last 1 would discard it, which is how `pair --qr` printed
+# the code and no QR at all.
+function Show-AndGetExitCode($result) {
+  $items = @($result)
+  if ($items.Count -gt 1) { $items[0..($items.Count - 2)] | ForEach-Object { Write-Host $_ } }
+  if ($items.Count -eq 0) { return 0 }
+  return [int]$items[-1]
+}
+
 switch ($Command.ToLower()) {
-  'install' { exit ([int](Invoke-Install | Select-Object -Last 1)) }
-  'doctor' { exit ([int](Invoke-Doctor | Select-Object -Last 1)) }
-  'pair' { exit ([int](Invoke-Pair | Select-Object -Last 1)) }
-  'devices' { exit ([int](Invoke-Devices | Select-Object -Last 1)) }
-  'revoke' { exit ([int](Invoke-Revoke | Select-Object -Last 1)) }
-  'status' { exit ([int](Invoke-Status | Select-Object -Last 1)) }
+  'install' { exit (Show-AndGetExitCode (Invoke-Install)) }
+  'doctor' { exit (Show-AndGetExitCode (Invoke-Doctor)) }
+  'pair' { exit (Show-AndGetExitCode (Invoke-Pair)) }
+  'devices' { exit (Show-AndGetExitCode (Invoke-Devices)) }
+  'revoke' { exit (Show-AndGetExitCode (Invoke-Revoke)) }
+  'status' { exit (Show-AndGetExitCode (Invoke-Status)) }
   { $_ -in 'start', 'stop', 'restart' } {
     $bash = Resolve-Bash
     if (-not $bash) { Write-Bad "start/stop need Git Bash (install Git for Windows)"; exit 1 }

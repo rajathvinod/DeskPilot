@@ -23,6 +23,7 @@ import {
   type Link,
 } from '@/lib/agents';
 import { ExpandedScreen } from '@/components/ExpandedScreen';
+import { QrScanner } from '@/components/QrScanner';
 import {
   askAgent,
   decideApproval,
@@ -44,6 +45,8 @@ import { acknowledgeAlerts, fetchAudit, setAway, type AuditSnapshot } from '@/li
 import { forgetDevice, getToken, pairDevice } from '@/lib/auth';
 import { engageKillSwitch, lockLaptop } from '@/lib/control';
 import { fetchFrame } from '@/lib/screen';
+import { parsePairPayload } from '@/lib/pairing';
+import { probeCamera } from '@/lib/camera';
 import {
   clickAt,
   normalizeTap,
@@ -1088,11 +1091,16 @@ function PairCard({
   const [name, setName] = useState('my phone');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  /** The viewfinder is only mounted while it is wanted, so a build without a camera never sees one. */
+  const [scanning, setScanning] = useState(false);
 
-  const submit = useCallback(async () => {
-    if (code.trim().length < 4 || busy) return;
+  // `override` is how a scanned QR pairs without waiting a render for `setCode` to land: the
+  // callback would otherwise still see the previous code and submit nothing.
+  const submit = useCallback(async (override?: string) => {
+    const value = (override ?? code).trim();
+    if (value.length < 4 || busy) return;
     setBusy(true);
-    const result = await pairDevice(baseUrl, code.trim(), name.trim());
+    const result = await pairDevice(baseUrl, value, name.trim());
     setBusy(false);
 
     if (result.ok) {
@@ -1112,6 +1120,30 @@ function PairCard({
             : result.detail,
     );
   }, [baseUrl, busy, code, name, onChanged]);
+
+  const openScanner = useCallback(async () => {
+    const support = await probeCamera();
+    if (!support.available) {
+      setMessage(`Scanning is unavailable: ${support.reason}.`);
+      return;
+    }
+    setMessage(null);
+    setScanning(true);
+  }, []);
+
+  const onScanned = useCallback(
+    (raw: string) => {
+      const parsed = parsePairPayload(raw);
+      if (parsed === null) {
+        setMessage('That QR is not a DeskPilot pairing code.');
+        return;
+      }
+      setScanning(false);
+      setCode(parsed.code);
+      void submit(parsed.code);
+    },
+    [submit],
+  );
 
   const forget = useCallback(async () => {
     await forgetDevice();
@@ -1141,9 +1173,10 @@ function PairCard({
       ) : (
         <>
           <Text style={styles.hint}>
-            Run ./scripts/dev.sh pair on the laptop, then type the six characters it prints. The
-            code is single use and lasts 30 minutes by default.
+            Run ./deskpilot.cmd pair --qr on the laptop, then scan the code it prints — or type
+            the six characters. A code is single use and lasts 30 minutes by default.
           </Text>
+          {scanning ? <QrScanner onScanned={onScanned} onCancel={() => setScanning(false)} /> : null}
           <TextInput
             style={styles.textField}
             value={code}
@@ -1174,6 +1207,12 @@ function PairCard({
               ]}
             >
               <Text style={styles.sendText}>{busy ? 'pairing…' : 'Pair'}</Text>
+            </Pressable>
+            <Pressable
+              onPress={() => void openScanner()}
+              style={({ pressed }) => [styles.key, pressed && styles.buttonPressed]}
+            >
+              <Text style={styles.keyText}>{scanning ? 'Scanning…' : 'Scan QR'}</Text>
             </Pressable>
           </View>
         </>

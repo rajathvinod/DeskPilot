@@ -302,14 +302,39 @@ function Invoke-Pair {
     # so the terminal can show what the phone's new scanner reads.
     $render = "const qr = require('qrcode-terminal'); qr.generate(process.argv[1], { small: true });"
     Push-Location (Join-Path $Root 'backend')
-    # Out-Host, so the QR prints here rather than being collected and flushed after the hints.
-    try { & node -e $render $minted.payload | Out-Host } finally { Pop-Location }
+    # qrcode-terminal draws with half-block characters, and Windows consoles default to code page
+    # 437 where those bytes render as garbage. Switching the console to UTF-8 for the drawing and
+    # back afterwards keeps every other line exactly as it was.
+    # The restore is deliberately missing. Switching the console back to 437 before the pipeline
+    # flushes is what turned the QR into garbage: PowerShell re-encodes on write, so the blocks
+    # were squeezed into code page 437 on their way out. Leaving this window on UTF-8 is the only
+    # arrangement that survives, and it is the better default for every command after it.
+    try {
+      & chcp.com 65001 | Out-Null
+      [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+      $qrText = (& node -e $render $minted.payload) -join "`n"
+
+      # Written as raw UTF-8 bytes, not with Write-Host. Under `-File` (which is how the .cmd shim
+      # runs this) PowerShell re-encodes buffered output using the console code page on the way out,
+      # and that is precisely what turned the blocks into garbage. The standard-output stream has
+      # no such opinion.
+      $bytes = [System.Text.Encoding]::UTF8.GetBytes($qrText + [Environment]::NewLine)
+      $standardOutput = [Console]::OpenStandardOutput()
+      $standardOutput.Write($bytes, 0, $bytes.Length)
+      $standardOutput.Flush()
+    } finally {
+      Pop-Location
+    }
     Write-Host "  On the phone: PAIR THIS PHONE -> Scan QR"
   } else {
     Write-Host "  On the phone: PAIR THIS PHONE -> type the code -> Pair"
   }
 
-  if ($minted.url) { Write-Host "  the phone should reach the backend at $($minted.url)" }
+  if ($minted.urls) {
+    Write-Host "  addresses this laptop answers on:"
+    foreach ($candidate in $minted.urls) { Write-Host "    $candidate" }
+    Write-Host "    use the one your phone can reach: same Wi-Fi -> 192.168.x, mobile data -> the 100.x"
+  }
   return 0
 }
 

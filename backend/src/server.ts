@@ -172,19 +172,28 @@ function bearerToken(header: string | undefined): string | undefined {
  * when neither exists — a laptop with no network can still pair by typing, and inventing
  * `localhost` here would produce a QR that leads the phone to itself.
  */
-function lanAddress(port: number): string | null {
+function lanAddresses(port: number): string[] {
   const candidates: string[] = [];
   for (const entries of Object.values(networkInterfaces())) {
     for (const entry of entries ?? []) {
       if (entry.family === 'IPv4' && !entry.internal) candidates.push(entry.address);
     }
   }
-  const tailnet = candidates.find((address) => address.startsWith('100.'));
-  const privateAddress = candidates.find((address) =>
+
+  // Tailscale first when it has a real 100.x address: that address works from any network, which
+  // is exactly what someone pairing from outside the house needs. A link-local 169.254 address is
+  // *not* that: it is what Windows shows for an adapter with no DHCP lease, including a Tailscale
+  // adapter that is not connected, so offering it would produce a QR that leads nowhere.
+  const tailnet = candidates.filter((address) => address.startsWith('100.'));
+  const privateLan = candidates.filter((address) =>
     /^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.)/.test(address),
   );
-  const chosen = tailnet ?? privateAddress;
-  return chosen === undefined ? null : `http://${chosen}:${port}`;
+
+  // Both are offered, because the right one depends on where the phone is. The LAN address comes
+  // first: pairing happens at home, with the phone on the same Wi-Fi, and a Tailscale adapter that
+  // is installed but disconnected still reports its 100.x address and would otherwise be
+  // recommended first - a QR that only works once you turn Tailscale on.
+  return [...new Set([...privateLan, ...tailnet])].map((address) => `http://${address}:${port}`);
 }
 
 function isLoopback(address: string | undefined): boolean {
@@ -862,10 +871,11 @@ async function main(): Promise<void> {
     }
 
     const minted = devices.createCode();
-    const url = lanAddress(config.port);
+    const urls = lanAddresses(config.port);
+    const url = urls[0] ?? null;
     const query = new URLSearchParams({ code: minted.code });
     if (url !== null) query.set('url', url);
-    return reply.send({ ...minted, url, payload: `deskpilot://pair?${query.toString()}` });
+    return reply.send({ ...minted, url, urls, payload: `deskpilot://pair?${query.toString()}` });
   });
 
   /**
